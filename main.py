@@ -1,10 +1,10 @@
 import argparse
 from multiprocessing.pool import ThreadPool
 import os
+import subprocess
 import sys
 
 from pytube import YouTube
-from pydub import AudioSegment
 import ytmusicapi
 import spotipy
 
@@ -19,12 +19,15 @@ def download_audio(track_youtube: YouTube, outpath: str = os.getcwd(), filename:
         return
     best_audio_stream.download(output_path=outpath, filename=filename)
 
-def convert_to_mp3(filepath: str, mp3_filename: str = 'audio.mp3'):
-    os.makedirs(os.path.dirname(mp3_filename), exist_ok=True)
-    AudioSegment.from_file(filepath).export(mp3_filename, format='mp3')
+def convert_to_different_format(filepath: str, track: typing.Any, out_filename: str = 'audio.m4a'):
+    os.makedirs(os.path.dirname(out_filename), exist_ok=True)
+    #AudioSegment.from_file(filepath).export(mp3_filename, format='mp3')
+    #os.system('ffmpeg -i ' + filepath + ' ' + out_filename)
+    with open(os.devnull, 'w') as FNULL:
+        subprocess.call(['ffmpeg', '-i', filepath] + create_metadata_args(track) + [out_filename, '-y'], stdout=FNULL, stderr=subprocess.STDOUT)
     os.remove(filepath)
 
-def full_download_track(track: typing.Any, ytmusic_client: ytmusicapi.YTMusic, outpath: str = os.getcwd()):
+def full_download_track(track: typing.Any, ytmusic_client: ytmusicapi.YTMusic, outpath: str = os.getcwd(), out_format: str = 'm4a'):
     if track is None:
         print('Could not find track')
         return
@@ -37,22 +40,32 @@ def full_download_track(track: typing.Any, ytmusic_client: ytmusicapi.YTMusic, o
         return
     print('Found YouTube Music Track: ' + result['title'] + ' by ' + result['artists'][0]['name'] + ' (' + str(result['duration_seconds']) + ' seconds)')
     tmp_filename = 'audio_' + result['videoId']
-    download_audio(YouTube('?v=' + result['videoId']), '.', tmp_filename)
-    convert_to_mp3(tmp_filename, pretty_print_path(track, outpath) + '.mp3')
-
-
+    yt_obj = YouTube('https://www.youtube.com/watch?v=' + result['videoId'])
+    yt_obj.bypass_age_gate()
+    download_audio(yt_obj, '.', tmp_filename)
+    convert_to_different_format(tmp_filename, track, pretty_print_path(track, outpath) + '.' + out_format)
+    print('Converted ' + track['name'] + ' by ' + track['artists'][0]['name'] + ' to ' + out_format + ' format')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Download Spotify tracks, albums, and playlists.')
     parser.add_argument('url', metavar='url', type=str, help='Spotify URL')
     parser.add_argument('-o', '--outpath', metavar='outpath', type=str, default=os.getcwd(), help='Output path, defaults to current directory')
+    parser.add_argument('-f', '--format', metavar='format', type=str, default='m4a', help='Output format, defaults to m4a')
+    parser.add_argument('--parallel', metavar='parallel', type=int, default=4, help='Number of parallel downloads, defaults to 4')
     args = parser.parse_args()
+
+    if args.parallel < 1:
+        print('Number of parallel downloads must be at least 1')
+        sys.exit(1)
     
     ytmusic = ytmusicapi.YTMusic()
     sp = spotipy.Spotify(client_credentials_manager = spotipy.oauth2.SpotifyClientCredentials(client_id='3f50284096894e778263708c821ca4e7', client_secret='ef56831f6296405b8af3433740c4c169'))
     if args.url.__contains__('track'):
         track = sp.track(args.url)
-        full_download_track(track, ytmusic, args.outpath)
+        if track is None:
+            print('Could not find track')
+            sys.exit(1)
+        full_download_track(track, ytmusic, args.outpath, args.format)
     elif args.url.__contains__('playlist'):
         playlist = sp.playlist(args.url)
         if playlist is None:
@@ -60,8 +73,8 @@ if __name__ == "__main__":
             sys.exit(1)
         run_arg_list = []
         for track in playlist['tracks']['items']:
-            run_arg_list.append((track['track'], ytmusic, args.outpath))
-        with ThreadPool(4) as p:
+            run_arg_list.append((track['track'], ytmusic, args.outpath, args.format))
+        with ThreadPool(args.parallel) as p:
             p.starmap(full_download_track, run_arg_list)
     elif args.url.__contains__('album'):
         album = sp.album(args.url)
@@ -70,6 +83,20 @@ if __name__ == "__main__":
             sys.exit(1)
         run_arg_list = []
         for track in album['tracks']['items']:
-            run_arg_list.append((track, ytmusic, args.outpath))
-        with ThreadPool(4) as p:
+            run_arg_list.append((track, ytmusic, args.outpath, args.format))
+        with ThreadPool(args.parallel) as p:
+            p.starmap(full_download_track, run_arg_list)
+    elif args.url.__contains__('artist'):
+        artist = sp.artist(args.url)
+        if artist is None:
+            print('Could not find artist')
+            sys.exit(1)
+        run_arg_list = []
+        print('Pulling albums and all tracks from artist...')
+        for album in sp.artist_albums(artist['id'])['items']:
+            album = sp.album(album['id'])
+            for track in album['tracks']['items']:
+                track = sp.track(track['id'])
+                run_arg_list.append((track, ytmusic, args.outpath, args.format))
+        with ThreadPool(args.parallel) as p:
             p.starmap(full_download_track, run_arg_list)

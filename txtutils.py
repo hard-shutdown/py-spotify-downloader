@@ -16,3 +16,6 @@ def combine_artists(artists_list: list) -> str:
 
 def pretty_print_path(track: typing.Any, outpath: str) -> str:
     return os.path.join(outpath, track['album']['name'], combine_artists(track['artists']), track['name'])
+
+def create_metadata_args(track: typing.Any) -> list:
+    return ['-metadata', 'title=' + track['name'] + '', '-metadata', 'artist=' + combine_artists(track['artists']) + '', '-metadata', 'album=' + track['album']['name'] + '', '-metadata', 'date=' + track['album']['release_date'] + '']                     
