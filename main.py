@@ -4,12 +4,12 @@ import os
 import subprocess
 import sys
 
-from pytube import YouTube
+from pytube import YouTube, helpers
 import ytmusicapi
 import spotipy
 
 from filters import *
-from txtutils import *
+from utils import *
 
 def download_audio(track_youtube: YouTube, outpath: str = os.getcwd(), filename: str = 'audio'):
     audio_streams = track_youtube.streams.filter(only_audio=True)
@@ -24,7 +24,7 @@ def convert_to_different_format(filepath: str, track: typing.Any, out_filename: 
     #AudioSegment.from_file(filepath).export(mp3_filename, format='mp3')
     #os.system('ffmpeg -i ' + filepath + ' ' + out_filename)
     with open(os.devnull, 'w') as FNULL:
-        subprocess.call(['ffmpeg', '-i', filepath] + create_metadata_args(track) + [out_filename, '-y'], stdout=FNULL, stderr=subprocess.STDOUT)
+        subprocess.call(['ffmpeg', '-i', filepath] + ['-ar', '44100', '-b:a', '320k'] + create_metadata_args(track) + [out_filename, '-y'], stdout=FNULL, stderr=subprocess.STDOUT)
     os.remove(filepath)
 
 def full_download_track(track: typing.Any, ytmusic_client: ytmusicapi.YTMusic, outpath: str = os.getcwd(), out_format: str = 'm4a'):
@@ -51,8 +51,12 @@ if __name__ == "__main__":
     parser.add_argument('url', metavar='url', type=str, help='Spotify URL')
     parser.add_argument('-o', '--outpath', metavar='outpath', type=str, default=os.getcwd(), help='Output path, defaults to current directory')
     parser.add_argument('-f', '--format', metavar='format', type=str, default='m4a', help='Output format, defaults to m4a')
+    parser.add_argument('--proxy', metavar='proxyserver', type=str, default=None, help='Proxy server, defaults to None')
     parser.add_argument('--parallel', metavar='parallel', type=int, default=4, help='Number of parallel downloads, defaults to 4')
     args = parser.parse_args()
+
+    if args.proxy is not None:
+        os.environ['ALL_PROXY'] = args.proxy
 
     if args.parallel < 1:
         print('Number of parallel downloads must be at least 1')
@@ -93,10 +97,17 @@ if __name__ == "__main__":
             sys.exit(1)
         run_arg_list = []
         print('Pulling albums and all tracks from artist...')
+        track_count = 0 
         for album in sp.artist_albums(artist['id'])['items']:
             album = sp.album(album['id'])
             for track in album['tracks']['items']:
                 track = sp.track(track['id'])
-                run_arg_list.append((track, ytmusic, args.outpath, args.format))
+                artlist = []
+                for track_artist in track['artists']:
+                    artlist.append(track_artist['name'])
+                if artlist.__contains__(artist['name']):
+                    run_arg_list.append((track, ytmusic, args.outpath, args.format))
+                    track_count += 1
+        print('Found ' + str(track_count) + ' tracks')
         with ThreadPool(args.parallel) as p:
             p.starmap(full_download_track, run_arg_list)
